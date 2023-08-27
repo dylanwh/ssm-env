@@ -1,8 +1,8 @@
-use std::{collections::HashMap, process::ExitCode};
+use std::{collections::HashMap, process::ExitCode, str::FromStr};
 
 use aws_sdk_ssm::{types::Parameter, Client};
 use clap::{command, Parser};
-use eyre::Result;
+use eyre::{Context, Result};
 use tokio::process::Command;
 
 #[derive(Parser, Debug)]
@@ -76,16 +76,22 @@ async fn main() -> Result<ExitCode> {
     Ok(ExitCode::from(u8::try_from(code).unwrap_or(1)))
 }
 
+/// Gets the names of all the parameters in the given AWS Systems Manager parameter store.
+/// Note that if the role doesn't have permission to list all the parameters, the -p (--param) option
+/// can be used to specify the parameters to fetch.
+/// TODO: support filtering by path.
 async fn get_parameter_names(client: &Client) -> Result<Vec<String>> {
-    Ok(client
+    let params = client
         .describe_parameters()
         .send()
-        .await?
+        .await
+        .context("Failed to get parameter names")?
         .parameters
         .into_iter()
         .flatten()
         .filter_map(|p| p.name)
-        .collect())
+        .collect();
+    Ok(params)
 }
 
 #[derive(Clone, Debug)]
@@ -95,8 +101,12 @@ struct Param {
 }
 
 trait ParamNames {
+    /// As we need only the names of parameters to call get_parameters, this function is used to
+    /// convert a Vec<Param> to a Vec<String> containing only the names.
     fn names(&self) -> Vec<String>;
 
+    /// This function is used to convert a Vec<Param> to a Vec<(String, String)>, which can
+    /// be used to create a HashMap.
     fn pairs(&self) -> Vec<(String, String)>;
 }
 
@@ -118,7 +128,10 @@ impl ParamNames for Vec<Param> {
     }
 }
 
-impl std::str::FromStr for Param {
+// This function is used to convert a string to a Param.  The string is
+// expected to be in the format "name:alias" where "name" is the parameter
+// name and "alias" is an optional alias for the parameter.
+impl FromStr for Param {
     type Err = &'static str;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
