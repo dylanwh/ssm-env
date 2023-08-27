@@ -2,7 +2,7 @@ use std::{collections::HashMap, process::ExitCode, str::FromStr};
 
 use aws_sdk_ssm::{types::Parameter, Client};
 use clap::{command, Parser};
-use eyre::{Context, Result};
+use eyre::Result;
 use tokio::process::Command;
 
 #[derive(Parser, Debug)]
@@ -17,7 +17,7 @@ struct Args {
     ignore: bool,
 
     /// Explicitly specify parameters to fetch and optionally rename the environment variable to set.
-    #[arg(long = "param", short, value_name = "NAME[:ENV]")]
+    #[arg(long = "param", short, value_name = "NAME[:ENV]", required = true)]
     params: Vec<Param>,
 
     /// The command to run after setting the environment variables from the ssm parameters.
@@ -32,10 +32,7 @@ async fn main() -> Result<ExitCode> {
     let args = Args::parse();
     let config = aws_config::load_from_env().await;
     let client = Client::new(&config);
-    let names = match args.params[..] {
-        [] => get_parameter_names(&client).await?,
-        _ => args.params.names(),
-    };
+    let names = args.params.names();
     let params = client
         .get_parameters()
         .set_names(Some(names))
@@ -74,24 +71,6 @@ async fn main() -> Result<ExitCode> {
 
     let code = cmd.spawn()?.wait().await?.code().unwrap_or(1);
     Ok(ExitCode::from(u8::try_from(code).unwrap_or(1)))
-}
-
-/// Gets the names of all the parameters in the given AWS Systems Manager parameter store.
-/// Note that if the role doesn't have permission to list all the parameters, the -p (--param) option
-/// can be used to specify the parameters to fetch.
-/// TODO: support filtering by path.
-async fn get_parameter_names(client: &Client) -> Result<Vec<String>> {
-    let params = client
-        .describe_parameters()
-        .send()
-        .await
-        .context("Failed to get parameter names")?
-        .parameters
-        .into_iter()
-        .flatten()
-        .filter_map(|p| p.name)
-        .collect();
-    Ok(params)
 }
 
 #[derive(Clone, Debug)]
