@@ -28,7 +28,7 @@ struct Args {
     /// be specified if it differs from the environment variable.
     #[arg(long, short = 'e', value_name = "ENV[=PARAM]")]
     export: Vec<Export>,
-    
+
     /// Export one level of a path of aws ssm parameters to environment variables. All
     /// parameters under the prefix will be exported as environment variables.
     #[arg(long, short = 'P', value_name = "PATH")]
