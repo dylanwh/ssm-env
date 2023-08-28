@@ -1,3 +1,11 @@
+#![warn(
+    clippy::all,
+    clippy::pedantic,
+    clippy::nursery,
+    clippy::unwrap_used,
+    clippy::expect_used
+)]
+
 use std::{collections::HashMap, process::ExitCode, str::FromStr};
 
 use aws_sdk_ssm::{types::Parameter, Client};
@@ -122,7 +130,7 @@ fn filter_export(param: Parameter, exports: &HashMap<String, String>) -> Option<
     } = param
     {
         let name = exports.get(&name).unwrap_or(&name);
-        Some((name.to_owned(), value))
+        Some((name.clone(), value))
     } else {
         None
     }
@@ -138,10 +146,10 @@ fn filter_export_path(param: Parameter, path: &str) -> Option<(String, String)> 
         let prefix = if path.ends_with('/') {
             path.to_owned()
         } else {
-            format!("{}/", path)
+            format!("{path}/")
         };
         let name = name.strip_prefix(&prefix).unwrap_or(&name);
-        Some((name.to_owned(), value.to_owned()))
+        Some((name.to_owned(), value))
     } else {
         None
     }
