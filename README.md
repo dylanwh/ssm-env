@@ -15,6 +15,25 @@ that (although it is not a significant change to add it).
 
 ## Usage
 
+```bash
+ssm-env --help
+set environment variables from AWS SSM Parameter Store
+
+Usage: ssm-env [OPTIONS] <UTILITY> [ARGUMENTS]...
+
+Arguments:
+  <UTILITY>       The command to run after setting the environment variables from the ssm parameters
+  [ARGUMENTS]...  The arguments to pass to the utility
+
+Options:
+      --no-decrypt            Decrypt SecureStrings
+  -i, --ignore                Ignore (clear) existing environment variables
+  -e, --export <ENV[=PARAM]>  Export an aws ssm parameter to an environment variable. The parameter name can be specified if it differs from the environment variable
+  -P, --export-path <PATH>    Export one level of a path of aws ssm parameters to environment variables. All parameters under the prefix will be exported as environment variables
+  -h, --help                  Print help
+  -V, --version               Print version
+```
+
 If you have an SSM parameter named `DATABASE_URL` that you want to feed into your application `my-app`,
 assuming the following is run from an EC2 instance with an appropriate IAM role:
 
