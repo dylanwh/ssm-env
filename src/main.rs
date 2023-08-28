@@ -16,9 +16,15 @@ struct Args {
     #[arg(long, short)]
     ignore: bool,
 
-    /// Explicitly specify parameters to fetch and optionally rename the environment variable to set.
-    #[arg(long = "param", short, value_name = "NAME[:ENV]", required = true)]
-    params: Vec<Param>,
+    /// Export an aws ssm parameter to an environment variable. The parameter name can
+    /// be specified if it differs from the environment variable.
+    #[arg(long, short = 'e', value_name = "ENV[=PARAM]")]
+    export: Vec<Export>,
+    
+    /// Export one level of a path of aws ssm parameters to environment variables. All
+    /// parameters under the prefix will be exported as environment variables.
+    #[arg(long, short = 'P', value_name = "PATH")]
+    export_path: Vec<String>,
 
     /// The command to run after setting the environment variables from the ssm parameters.
     utility: String,
@@ -27,101 +33,131 @@ struct Args {
     arguments: Vec<String>,
 }
 
+#[derive(Clone, Debug)]
+struct Export {
+    env: String,
+    param: Option<String>,
+}
+
+impl Args {
+    fn parameter_names(&self) -> Vec<String> {
+        self.export
+            .iter()
+            .map(|e| e.param.clone().unwrap_or_else(|| e.env.clone()))
+            .collect::<Vec<_>>()
+    }
+
+    fn export_names(&self) -> HashMap<String, String> {
+        self.export
+            .iter()
+            .filter_map(|e| match e {
+                Export {
+                    env,
+                    param: Some(param),
+                } => Some((param.clone(), env.clone())),
+                Export { param: None, .. } => None,
+            })
+            .collect::<HashMap<_, _>>()
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<ExitCode> {
+    env_logger::init();
+
     let args = Args::parse();
     let config = aws_config::load_from_env().await;
     let client = Client::new(&config);
-    let names = args.params.names();
-    let params = client
-        .get_parameters()
-        .set_names(Some(names))
-        .set_with_decryption(Some(!args.no_decrypt))
-        .send()
-        .await?
-        .parameters
-        .into_iter()
-        .flatten()
-        .filter_map(|p| {
-            if let Parameter {
-                name: Some(name),
-                value: Some(value),
-                ..
-            } = p
-            {
-                Some((name, value))
-            } else {
-                None
-            }
-        })
-        .collect::<Vec<_>>();
+    let names = args.parameter_names();
+    let mut params: Vec<(String, String)> = Vec::new();
+    if !names.is_empty() {
+        let exports = args.export_names();
+        let p = client
+            .get_parameters()
+            .set_names(Some(names))
+            .set_with_decryption(Some(!args.no_decrypt))
+            .send()
+            .await?
+            .parameters
+            .into_iter()
+            .flatten()
+            .filter_map(|p| filter_export(p, &exports))
+            .collect::<Vec<_>>();
 
-    let rename = args.params.pairs().into_iter().collect::<HashMap<_, _>>();
+        params.extend(p);
+    }
+    let paths = args.export_path;
+    for path in paths {
+        let p = client
+            .get_parameters_by_path()
+            .set_path(Some(path.clone()))
+            .set_with_decryption(Some(!args.no_decrypt))
+            .send()
+            .await?
+            .parameters
+            .into_iter()
+            .flatten()
+            .filter_map(|param| filter_export_path(param, &path))
+            .collect::<Vec<_>>();
+
+        params.extend(p);
+    }
+
     let mut cmd = Command::new(args.utility);
     if args.ignore {
         cmd.env_clear();
     }
-    for arg in args.arguments {
-        cmd.arg(arg);
-    }
-    for (name, value) in params {
-        let name = rename.get(&name).unwrap_or(&name);
-        cmd.env(name, value);
-    }
+    cmd.args(args.arguments);
+    cmd.envs(params);
 
     let code = cmd.spawn()?.wait().await?.code().unwrap_or(1);
     Ok(ExitCode::from(u8::try_from(code).unwrap_or(1)))
 }
 
-#[derive(Clone, Debug)]
-struct Param {
-    name: String,
-    alias: Option<String>,
-}
-
-trait ParamNames {
-    /// As we need only the names of parameters to call get_parameters, this function is used to
-    /// convert a Vec<Param> to a Vec<String> containing only the names.
-    fn names(&self) -> Vec<String>;
-
-    /// This function is used to convert a Vec<Param> to a Vec<(String, String)>, which can
-    /// be used to create a HashMap.
-    fn pairs(&self) -> Vec<(String, String)>;
-}
-
-impl ParamNames for Vec<Param> {
-    fn names(&self) -> Vec<String> {
-        self.iter().map(|p| p.name.clone()).collect()
-    }
-
-    fn pairs(&self) -> Vec<(String, String)> {
-        self.iter()
-            .filter_map(|p| match p {
-                Param {
-                    name,
-                    alias: Some(alias),
-                } => Some((name.clone(), alias.clone())),
-                _ => None,
-            })
-            .collect()
+fn filter_export(param: Parameter, exports: &HashMap<String, String>) -> Option<(String, String)> {
+    if let Parameter {
+        name: Some(name),
+        value: Some(value),
+        ..
+    } = param
+    {
+        let name = exports.get(&name).unwrap_or(&name);
+        Some((name.to_owned(), value))
+    } else {
+        None
     }
 }
 
-// This function is used to convert a string to a Param.  The string is
-// expected to be in the format "name:alias" where "name" is the parameter
-// name and "alias" is an optional alias for the parameter.
-impl FromStr for Param {
+fn filter_export_path(param: Parameter, path: &str) -> Option<(String, String)> {
+    if let Parameter {
+        name: Some(name),
+        value: Some(value),
+        ..
+    } = param
+    {
+        let prefix = if path.ends_with('/') {
+            path.to_owned()
+        } else {
+            format!("{}/", path)
+        };
+        let name = name.strip_prefix(&prefix).unwrap_or(&name);
+        Some((name.to_owned(), value.to_owned()))
+    } else {
+        None
+    }
+}
+impl FromStr for Export {
     type Err = &'static str;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.split_once(':') {
-            Some((name, alias)) => Ok(Self {
-                name: name.to_owned(),
-                alias: Some(alias.to_owned()),
+        match s.split_once('=') {
+            Some((env, param)) => Ok(Self {
+                env: env.to_owned(),
+                param: Some(param.to_owned()),
             }),
             None => Ok(Self {
-                name: s.to_owned(),
-                alias: None,
+                env: s.to_owned(),
+                param: None,
             }),
         }
     }

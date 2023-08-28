@@ -10,6 +10,12 @@ description = "set environment variables from AWS SSM Parameter Store"
 aws-config = "0.56.1"
 aws-sdk-ssm = "0.30.0"
 clap = { version = "4.4.0", features = ["derive"] }
+env_logger = "0.10.0"
 eyre = "0.6.8"
 reqwest = { version = "0.11.20", default-features = false, features = ["tokio-rustls", "rustls", "hyper-rustls", "rustls-tls", "serde_json"] }
 tokio = { version = "1.32.0", features = ["full"] }
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
